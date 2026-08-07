@@ -9,13 +9,16 @@
   "main": "dist/index.js",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "engines": {
@@ -25,9 +28,21 @@
     "mcp",
     "neovim",
     "lsp",
-    "ai-agent"
+    "ai-agent",
+    "model-context-protocol"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santanusinha/neovim-use-mcp.git"
+  },
+  "homepage": "https://github.com/santanusinha/neovim-use-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/santanusinha/neovim-use-mcp/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "neovim": "^5.3.0",
