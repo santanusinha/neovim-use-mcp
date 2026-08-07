@@ -64,8 +64,8 @@ Add the server to your MCP client config. Use an absolute path.
   }
 }
 ```
-
-`NVIM_MCP_CWD` sets the project root. The language server uses that root to
+> [!TIP]
+> `NVIM_MCP_CWD` sets the project root. The language server uses that root to
 find `tsconfig.json`, `go.mod`, `Cargo.toml` and so on. If you leave it out,
 the server uses the directory that the agent starts it in.
 
