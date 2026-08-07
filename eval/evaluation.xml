@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>Use the Neovim MCP server on the neovim-use-mcp repository. Open src/util/config.ts and find the ServerConfig field that sets how long the server waits for language servers to settle. What is its default value in milliseconds?</question>
+    <answer>3000</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the neovim-use-mcp repository, src/util/errors.ts builds a hint for the error that a file has no open buffer. Which tool name does that hint tell the agent to call first?</question>
+    <answer>nvim_open_file</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>List every tool that the neovim-use-mcp server registers. How many tools are there in total?</question>
+    <answer>18</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Open src/index.ts in the neovim-use-mcp repository and read the McpServer constructor. What version string does the server report?</question>
+    <answer>0.1.0</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The warm-up Lua chunk in src/nvim/lua.ts waits until the language server client count stays stable. How many stable polling rounds does the loop require before it stops waiting?</question>
+    <answer>6</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In src/util/config.ts of the neovim-use-mcp repository, find the option that limits how many lines one read call returns. What is its default value?</question>
+    <answer>2000</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The exec tools of neovim-use-mcp are on by default. Which command line flag, parsed in src/util/config.ts, turns them off?</question>
+    <answer>--no-exec</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Read the luaError helper in src/util/format.ts. Which key in a returned Lua table marks a failure?</question>
+    <answer>error</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Count the process signal handlers registered in src/index.ts of neovim-use-mcp that call the shutdown function. How many signals are handled?</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The server instructions in src/index.ts name the tool an agent must prefer over a text replace when it renames a symbol. Which tool is it?</question>
+    <answer>nvim_rename_symbol</answer>
+  </qa_pair>
+</evaluation>
