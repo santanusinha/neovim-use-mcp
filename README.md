@@ -1,5 +1,9 @@
 # neovim-use-mcp
 
+[![npm version](https://img.shields.io/npm/v/neovim-use-mcp.svg)](https://www.npmjs.com/package/neovim-use-mcp)
+[![CI](https://github.com/santanusinha/neovim-use-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/santanusinha/neovim-use-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 An MCP server that edits files **through a real Neovim instance**. Your agent
 gets your language servers, your formatters and your plugins, not a plain text
 writer.
@@ -36,8 +40,22 @@ If that command prints errors, a plugin breaks headless start. Use
 
 ## Install
 
+### From npm (recommended)
+
 ```bash
-git clone <this repo> neovim-use-mcp
+npm install -g neovim-use-mcp
+```
+
+Or use `npx` without a global install:
+
+```bash
+npx neovim-use-mcp
+```
+
+### From source
+
+```bash
+git clone https://github.com/santanusinha/neovim-use-mcp.git
 cd neovim-use-mcp
 npm install
 npm run build
@@ -49,7 +67,40 @@ The build writes `dist/index.js`. That file is the server.
 
 ## Connect an agent
 
-Add the server to your MCP client config. Use an absolute path.
+Add the server to your MCP client config.
+
+**With npx (no install needed):**
+
+```json
+{
+  "mcpServers": {
+    "neovim": {
+      "command": "npx",
+      "args": ["neovim-use-mcp"],
+      "env": {
+        "NVIM_MCP_CWD": "/absolute/path/to/your/project"
+      }
+    }
+  }
+}
+```
+
+**With a global install:**
+
+```json
+{
+  "mcpServers": {
+    "neovim": {
+      "command": "neovim-use-mcp",
+      "env": {
+        "NVIM_MCP_CWD": "/absolute/path/to/your/project"
+      }
+    }
+  }
+}
+```
+
+**From a local build:**
 
 ```json
 {
@@ -295,18 +346,29 @@ to `old_text`, or set `replace_all: true` if you truly want every match.
 ```bash
 npm run dev              # tsc --watch
 npm test                 # vitest, uses a real headless nvim
+npm run typecheck        # tsc --noEmit
 npm run inspect          # MCP Inspector UI
 ```
 
-List the tools without a UI:
+### Docker
+
+A Dockerfile is included for isolated or CI usage. The image bundles Node and
+Neovim, but has no user Neovim config. Mount your config if you need LSP:
 
 ```bash
-npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/list
+docker build -t neovim-use-mcp .
+docker run --rm neovim-use-mcp
 ```
 
-The Inspector CLI is good for `tools/list`. For a real tool call, use the
-Inspector UI, because the CLI stops the server before a language server
-attaches.
+### Releasing
+
+Releases publish to npm through GitHub Actions with OIDC trusted publishing.
+No npm token is stored.
+
+1. Bump the version in `package.json`.
+2. Tag and push: `git tag v0.x.0 && git push origin v0.x.0`.
+3. Create a GitHub Release from the tag.
+4. The `Publish to npm` workflow builds, tests, and publishes automatically.
 
 ---
 

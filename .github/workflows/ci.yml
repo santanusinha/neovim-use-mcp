@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -28,9 +28,9 @@ jobs:
 
       - name: Set up Neovim
         run: |
-          curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz
-          tar xzf nvim-linux64.tar.gz
-          echo "$PWD/nvim-linux64/bin" >> "$GITHUB_PATH"
+          curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
+          tar xzf nvim-linux-x86_64.tar.gz
+          echo "$PWD/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: npm ci
