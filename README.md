@@ -314,4 +314,5 @@ attaches.
 
 MIT
 
-!!! This is vibe coded slop. I guarantee nothing!!
+> [!CAUTION]
+> This is completely vibe coded. I guarantee absolutely nothing!!
