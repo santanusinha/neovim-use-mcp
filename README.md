@@ -10,8 +10,9 @@ writer.
 
 - **Real LSP** — diagnostics after every edit, rename, code actions, hover,
   references, document and workspace symbols.
-- **Format on save** — edits write the buffer, so `BufWritePre` runs and your
-  formatter fires.
+- **Minimal diffs** — edit tools save the buffer with `noautocmd write` by
+  default, so `BufWritePre` (format-on-save) does not run. Only the edited
+  lines change. Use `nvim_format` to format explicitly.
 - **Plugin access** — `nvim_command` and `nvim_exec_lua` reach anything else.
 - **stdio transport** — the server starts with the agent and stops with it.
   It also stops the Neovim child process.
@@ -176,7 +177,7 @@ Three rules make the results much better:
 | `nvim_edit_lines` | `path`, `start_line`, `end_line`, `text`, `save?` | Replace a line range |
 | `nvim_edit_text` | `path`, `old_text`, `new_text`, `replace_all?`, `save?` | Replace exact text |
 | `nvim_insert_lines` | `path`, `line`, `text`, `save?` | Insert text before a line |
-| `nvim_save_buffer` | `path` | Write a buffer and run format on save |
+| `nvim_save_buffer` | `path` | Write a buffer (no format-on-save autocmds) |
 | `nvim_list_buffers` | — | List open buffers |
 
 ### LSP

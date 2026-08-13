@@ -41,7 +41,7 @@ export async function diagnosticsFor(
   return result as Diagnostic[];
 }
 
-/** Save the buffer so BufWritePre autocommands (formatters) run. */
+/** Write the buffer to disk. Does not fire BufWritePre autocmds (no formatter side-effect). */
 export async function saveBuffer(
   ctx: ToolContext,
   path: string,

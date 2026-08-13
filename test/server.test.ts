@@ -175,6 +175,41 @@ describe("neovim-use-mcp", () => {
     expect(text).toContain("demo.txt");
   });
 
+  it("edit does not trigger format-on-save autocmds (no whole-file reformat)", async () => {
+    // Set up a file with multiple lines.
+    const fmtFile = join(dir, "format-check.txt");
+    const original = "line1\nline2\nline3\nline4\nline5\n";
+    writeFileSync(fmtFile, original);
+    await client.call("nvim_open_file", { path: fmtFile, wait_ms: 0 });
+    // Install a BufWritePre autocmd that appends FORMATTED to every line.
+    // A real formatter (jdtls, conform) does the same via this event.
+    await client.call("nvim_exec_lua", {
+      code: `vim.api.nvim_create_autocmd("BufWritePre", {
+  pattern = "format-check.txt",
+  callback = function(ev)
+    local lines = vim.api.nvim_buf_get_lines(ev.buf, 0, -1, false)
+    for i, l in ipairs(lines) do lines[i] = l .. "FORMATTED" end
+    vim.api.nvim_buf_set_lines(ev.buf, 0, -1, false, lines)
+  end,
+})`,
+    });
+    // Edit only line 3.
+    await client.call("nvim_edit_lines", {
+      path: fmtFile,
+      start_line: 3,
+      end_line: 3,
+      text: "LINE3-EDITED",
+    });
+    const saved = readFileSync(fmtFile, "utf8");
+    // The autocmd must not have run: no line must contain FORMATTED.
+    expect(saved).not.toContain("FORMATTED");
+    // The edit must be present.
+    expect(saved).toContain("LINE3-EDITED");
+    // Lines outside the edit must be unchanged.
+    expect(saved).toContain("line1");
+    expect(saved).toContain("line5");
+  }, 30000);
+
   it("runs Lua", async () => {
     const text = await client.call("nvim_exec_lua", { code: "return 1 + 1" });
     expect(text.trim()).toBe("2");

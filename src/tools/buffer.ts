@@ -86,7 +86,8 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
       title: "Replace a line range",
       description:
         "Replace lines start_line..end_line (1-based, inclusive) with new text. " +
-        "Saves the buffer by default, so format-on-save plugins run. " +
+        "Saves the buffer by default without running format-on-save autocmds, so the diff " +
+        "is minimal. Use nvim_format to format after editing. " +
         "Returns fresh LSP diagnostics for the file.",
       inputSchema: {
         path: z.string().describe("File path"),
@@ -128,7 +129,8 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
       title: "Replace exact text",
       description:
         "Replace an exact string in a file. Fails if the string is missing, or if it " +
-        "appears more than once and replace_all is false. Saves by default.",
+        "appears more than once and replace_all is false. Saves without running " +
+        "format-on-save autocmds by default.",
       inputSchema: {
         path: z.string().describe("File path"),
         old_text: z.string().describe("Exact text to find, including indentation"),
@@ -180,7 +182,7 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
       title: "Insert lines",
       description:
         "Insert text before the given line, 1-based. Use a line beyond the end to append. " +
-        "Saves by default.",
+        "Saves without running format-on-save autocmds by default.",
       inputSchema: {
         path: z.string().describe("File path"),
         line: z.number().int().min(1).describe("Insert before this line, 1-based"),
@@ -218,8 +220,8 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Save a buffer",
       description:
-        "Write a buffer to disk. BufWritePre autocommands run, so formatters and " +
-        "linters fire. Use this after edits made with save set to false.",
+        "Write a buffer to disk without running format-on-save autocmds. " +
+        "Use this after edits made with save set to false.",
       inputSchema: { path: z.string().describe("File path") },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },

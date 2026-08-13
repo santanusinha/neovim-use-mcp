@@ -162,13 +162,13 @@ return { buffer = buf, replacements = replace_all and count or 1,
   new_line_count = vim.api.nvim_buf_line_count(buf) }
 `;
 
-/** Save a buffer so BufWritePre autocommands run. */
+/** Save a buffer without firing BufWritePre autocmds (no formatter side-effect). */
 export const SAVE_BUFFER = `
 local path = ...
 local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
 if buf == -1 then return { error = "not_open" } end
 local ok, err = pcall(function()
-  vim.api.nvim_buf_call(buf, function() vim.cmd("silent write") end)
+  vim.api.nvim_buf_call(buf, function() vim.cmd("noautocmd write") end)
 end)
 if not ok then return { error = tostring(err) } end
 return { buffer = buf, path = vim.api.nvim_buf_get_name(buf),
@@ -338,7 +338,7 @@ local saved = {}
 for file, _ in pairs(touched) do
   local b = vim.fn.bufnr(file)
   if b ~= -1 then
-    vim.api.nvim_buf_call(b, function() vim.cmd("silent write") end)
+    vim.api.nvim_buf_call(b, function() vim.cmd("noautocmd write") end)
     saved[#saved + 1] = file
   end
 end
@@ -383,7 +383,7 @@ if apply_index and apply_index > 0 then
     local cmd = type(action.command) == "table" and action.command or action
     if client then client:exec_cmd(cmd, { bufnr = buf }) end
   end
-  vim.api.nvim_buf_call(buf, function() vim.cmd("silent write") end)
+  vim.api.nvim_buf_call(buf, function() vim.cmd("noautocmd write") end)
   return { applied = action.title }
 end
 
@@ -411,7 +411,7 @@ if start_line and end_line then
 end
 local ok, err = pcall(vim.lsp.buf.format, opts)
 if not ok then return { error = tostring(err) } end
-vim.api.nvim_buf_call(buf, function() vim.cmd("silent write") end)
+vim.api.nvim_buf_call(buf, function() vim.cmd("noautocmd write") end)
 return { path = vim.api.nvim_buf_get_name(buf), line_count = vim.api.nvim_buf_line_count(buf) }
 `;
 
