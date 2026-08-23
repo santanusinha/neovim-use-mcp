@@ -92,6 +92,22 @@ describe("neovim-use-mcp", () => {
     expect(text).toContain("3 lines");
   }, 30000);
 
+  it("opens several files at once", async () => {
+    const second = join(dir, "second.txt");
+    writeFileSync(second, "one\ntwo\n");
+    const third = join(dir, "third.txt");
+    writeFileSync(third, "only\n");
+    const text = await client.call("nvim_open_file", {
+      path: [file, second, third],
+      wait_ms: 0,
+    });
+    expect(text).toContain("demo.txt");
+    expect(text).toContain("second.txt");
+    expect(text).toContain("third.txt");
+    expect(text).toContain("2 lines");
+    expect(text).toContain("1 lines");
+  }, 30000);
+
   it("reads lines with numbers", async () => {
     const text = await client.call("nvim_read_file", { path: file });
     expect(text).toContain("1  alpha");

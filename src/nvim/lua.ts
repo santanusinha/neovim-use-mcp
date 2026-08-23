@@ -31,6 +31,53 @@ end
 vim.wait(200)
 return { loaded = loaded }
 `;
+/** Open several files, attach LSP, and report buffer facts for each. */
+export const OPEN_FILES = `
+local paths, wait_ms = ...
+if type(paths) ~= "table" then paths = { paths } end
+local out = {}
+for _, path in ipairs(paths) do
+  local abs = vim.fn.fnamemodify(path, ":p")
+  if vim.fn.filereadable(abs) == 0 and vim.fn.isdirectory(abs) == 1 then
+    out[#out + 1] = { error = "path is a directory: " .. abs }
+  else
+    vim.cmd("edit " .. vim.fn.fnameescape(abs))
+    local buf = vim.api.nvim_get_current_buf()
+    vim.bo[buf].buflisted = true
+
+    -- Servers attach at different speeds. Wait for the count to stay stable.
+    local deadline = vim.loop.now() + (wait_ms or 3000)
+    local clients = {}
+    local stable = 0
+    while vim.loop.now() < deadline do
+      local now = vim.lsp.get_clients({ bufnr = buf })
+      if #now > 0 and #now == #clients then
+        stable = stable + 1
+        if stable >= 6 then break end
+      else
+        stable = 0
+      end
+      clients = now
+      vim.wait(100)
+    end
+    clients = vim.lsp.get_clients({ bufnr = buf })
+
+    local names = {}
+    for _, c in ipairs(clients) do names[#names + 1] = c.name end
+    out[#out + 1] = {
+      buffer = buf,
+      path = abs,
+      exists = vim.fn.filereadable(abs) == 1,
+      line_count = vim.api.nvim_buf_line_count(buf),
+      filetype = vim.bo[buf].filetype,
+      modified = vim.bo[buf].modified,
+      lsp_clients = names,
+    }
+  end
+end
+return out
+`;
+
 /** Open a file, attach LSP, and report buffer facts. */
 export const OPEN_FILE = `
 local path, wait_ms = ...

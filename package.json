@@ -1,6 +1,6 @@
 {
   "name": "neovim-use-mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MCP server that edits files through a real Neovim instance, so agents get LSP, Treesitter and plugins.",
   "type": "module",
   "bin": {

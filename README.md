@@ -148,8 +148,9 @@ If you see `No LSP client attached`, read
 
 The tools follow one simple order.
 
-1. **Open** the file with `nvim_open_file`. This starts the language server.
-   Every LSP tool needs an open buffer.
+1. **Open** the file(s) with `nvim_open_file`. Pass an array of paths to open
+   several files at once. This starts the language server. Every LSP tool needs
+   an open buffer.
 2. **Read** with `nvim_read_file` to get numbered lines.
 3. **Edit** with `nvim_edit_text`, `nvim_edit_lines` or `nvim_insert_lines`.
    Each edit saves the file and returns fresh diagnostics.
@@ -172,7 +173,7 @@ Three rules make the results much better:
 
 | Tool | Arguments | Purpose |
 |---|---|---|
-| `nvim_open_file` | `path`, `wait_ms?` | Open a file and start its LSP client |
+| `nvim_open_file` | `path` (string or array), `wait_ms?` | Open files and start their LSP clients |
 | `nvim_read_file` | `path`, `start_line?`, `end_line?` | Read numbered lines |
 | `nvim_edit_lines` | `path`, `start_line`, `end_line`, `text`, `save?` | Replace a line range |
 | `nvim_edit_text` | `path`, `old_text`, `new_text`, `replace_all?`, `save?` | Replace exact text |

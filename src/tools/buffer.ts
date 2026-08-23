@@ -9,12 +9,15 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "nvim_open_file",
     {
-      title: "Open a file in Neovim",
+      title: "Open files in Neovim",
       description:
-        "Open a file in a Neovim buffer and start its LSP client. Returns the buffer id, " +
-        "filetype, line count and attached LSP clients. Call this before LSP tools.",
+        "Open one or more files in Neovim buffers and start their LSP clients. " +
+        "Pass a single path or an array of paths. Returns the buffer id, filetype, " +
+        "line count and attached LSP clients for each file. Call this before LSP tools.",
       inputSchema: {
-        path: z.string().describe("File path, absolute or relative to the server cwd"),
+        path: z
+          .union([z.string(), z.array(z.string())])
+          .describe("File path, or an array of file paths, absolute or relative to the server cwd"),
         wait_ms: z
           .number()
           .int()
@@ -27,15 +30,21 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
     },
     async ({ path, wait_ms }) => {
       try {
-        const info = await ensureOpen(ctx, path, wait_ms);
-        const clients = (info.lsp_clients as string[]) ?? [];
-        const text =
-          `Opened ${shortPath(String(info.path))} (buffer ${info.buffer}, ` +
-          `${info.line_count} lines, filetype ${String(info.filetype) || "none"}).\n` +
-          (clients.length > 0
-            ? `LSP clients: ${clients.join(", ")}`
-            : "No LSP client attached. Diagnostics may be empty.");
-        return ok(text, info);
+        const paths = Array.isArray(path) ? path : [path];
+        const results = await ctx.session.lua<Record<string, unknown>[]>(
+          lua.OPEN_FILES,
+          [paths, wait_ms ?? ctx.config.lspWaitMs],
+        );
+        const lines = (results ?? []).map((info) => {
+          if (info.error) return `Could not open: ${String(info.error)}`;
+          const clients = (info.lsp_clients as string[]) ?? [];
+          const base = `Opened ${shortPath(String(info.path))} (buffer ${info.buffer}, ` +
+            `${info.line_count} lines, filetype ${String(info.filetype) || "none"}).`;
+          return clients.length > 0
+            ? `${base}\n  LSP clients: ${clients.join(", ")}`
+            : `${base}\n  No LSP client attached. Diagnostics may be empty.`;
+        });
+        return ok(lines.join("\n"), { files: results });
       } catch (error) {
         return fail(describeError(error));
       }
@@ -85,10 +94,11 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Replace a line range",
       description:
-        "Replace lines start_line..end_line (1-based, inclusive) with new text. " +
+        "This is the default way to edit files. Use the provided line numbers to " +
+        "directly replace lines start_line..end_line (1-based, inclusive) with new text. " +
         "Saves the buffer by default without running format-on-save autocmds, so the diff " +
-        "is minimal. Use nvim_format to format after editing. " +
-        "Returns fresh LSP diagnostics for the file.",
+        "is minimal. Returns fresh LSP diagnostics for the file." +
+        "Use nvim_format to format after editing once editing and fixes on that are done.",
       inputSchema: {
         path: z.string().describe("File path"),
         start_line: z.number().int().min(1).describe("First line to replace, 1-based"),
@@ -130,7 +140,7 @@ export function registerBufferTools(server: McpServer, ctx: ToolContext): void {
       description:
         "Replace an exact string in a file. Fails if the string is missing, or if it " +
         "appears more than once and replace_all is false. Saves without running " +
-        "format-on-save autocmds by default.",
+        "format-on-save autocmds by default. It is recommended to avoid using this tool for multi-line edits.",
       inputSchema: {
         path: z.string().describe("File path"),
         old_text: z.string().describe("Exact text to find, including indentation"),
