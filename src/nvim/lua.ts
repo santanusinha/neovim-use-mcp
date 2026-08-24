@@ -151,7 +151,7 @@ local total = vim.api.nvim_buf_line_count(buf)
 if start_line < 1 or start_line > total + 1 then
   return { error = "start_line " .. start_line .. " is out of range 1.." .. (total + 1) }
 end
-local new_lines = vim.split(text, "\\n", { plain = true })
+local new_lines = vim.split(text, "\n", { plain = true })
 if text == "" then new_lines = {} end
 vim.api.nvim_buf_set_lines(buf, start_line - 1, end_line, false, new_lines)
 return {
@@ -169,7 +169,7 @@ local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
 if buf == -1 then return { error = "not_open" } end
 local total = vim.api.nvim_buf_line_count(buf)
 local at = math.max(0, math.min(line - 1, total))
-local new_lines = vim.split(text, "\\n", { plain = true })
+local new_lines = vim.split(text, "\n", { plain = true })
 vim.api.nvim_buf_set_lines(buf, at, at, false, new_lines)
 return { buffer = buf, inserted_at = at + 1, new_line_count = vim.api.nvim_buf_line_count(buf) }
 `;

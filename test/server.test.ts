@@ -134,6 +134,23 @@ describe("neovim-use-mcp", () => {
     expect(readFileSync(file, "utf8")).toContain("BETA");
   }, 20000);
 
+  it("replaces a line range with multiple lines", async () => {
+    const multi = join(dir, "multi.txt");
+    writeFileSync(multi, "one\ntwo\nthree\n");
+    await client.call("nvim_open_file", { path: multi, wait_ms: 0 });
+    await client.call("nvim_edit_lines", {
+      path: multi,
+      start_line: 2,
+      end_line: 2,
+      text: "TWO-A\nTWO-B",
+    });
+    const saved = readFileSync(multi, "utf8");
+    expect(saved).toContain("one");
+    expect(saved).toContain("TWO-A");
+    expect(saved).toContain("TWO-B");
+    expect(saved).toContain("three");
+  }, 20000);
+
   it("replaces exact text", async () => {
     await client.call("nvim_edit_text", {
       path: file,
