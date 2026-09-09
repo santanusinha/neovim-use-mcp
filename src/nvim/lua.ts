@@ -89,6 +89,22 @@ vim.cmd("edit " .. vim.fn.fnameescape(abs))
 local buf = vim.api.nvim_get_current_buf()
 vim.bo[buf].buflisted = true
 
+-- Fast path. The buffer is already open with clients, so skip the wait loop.
+local existing = vim.lsp.get_clients({ bufnr = buf })
+if vim.api.nvim_buf_is_loaded(buf) and #existing > 0 then
+  local names = {}
+  for _, c in ipairs(existing) do names[#names + 1] = c.name end
+  return {
+    buffer = buf,
+    path = abs,
+    exists = vim.fn.filereadable(abs) == 1,
+    line_count = vim.api.nvim_buf_line_count(buf),
+    filetype = vim.bo[buf].filetype,
+    modified = vim.bo[buf].modified,
+    lsp_clients = names,
+  }
+end
+
 -- Servers attach at different speeds. Wait for the count to stay stable, so a
 -- slow real language server is not missed behind a fast linter bridge.
 local deadline = vim.loop.now() + (wait_ms or 3000)
@@ -252,7 +268,29 @@ else
     if vim.api.nvim_buf_is_loaded(b) and vim.bo[b].buflisted then bufs[#bufs + 1] = b end
   end
 end
-vim.wait(wait_ms or 300)
+
+-- Poll until the diagnostic set is stable or the deadline passes. A flat sleep
+-- wastes time when servers are fast, and cuts off slow servers.
+local deadline = vim.loop.now() + (wait_ms or 500)
+local previous, stable = nil, 0
+while vim.loop.now() < deadline do
+  local current = {}
+  for _, buf in ipairs(bufs) do
+    for _, d in ipairs(vim.diagnostic.get(buf)) do
+      current[#current + 1] = d.lnum .. ":" .. d.col .. ":" .. (d.message or "")
+    end
+  end
+  table.sort(current)
+  local key = table.concat(current, "|")
+  if key == previous then
+    stable = stable + 1
+    if stable >= 2 then break end
+  else
+    stable = 0
+  end
+  previous = key
+  vim.wait(100)
+end
 
 local names = { "ERROR", "WARN", "INFO", "HINT" }
 local min = 4
