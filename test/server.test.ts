@@ -11,8 +11,8 @@ class Client {
   private pending = new Map<number, (msg: any) => void>();
   private nextId = 1;
 
-  constructor(cwd: string) {
-    this.proc = spawn("node", ["dist/index.js", "--cwd", cwd], {
+  constructor(cwd: string, extraArgs: string[] = []) {
+    this.proc = spawn("node", ["dist/index.js", "--cwd", cwd, ...extraArgs], {
       stdio: ["pipe", "pipe", "ignore"],
     });
     this.proc.stdout!.on("data", (chunk: Buffer) => {
@@ -51,6 +51,17 @@ class Client {
     return response.result?.content?.[0]?.text ?? JSON.stringify(response);
   }
 
+  /** Call a tool and return the structured content the server attached. */
+  async callStructured(name: string, args: Record<string, unknown>): Promise<any> {
+    const response = await this.send("tools/call", { name, arguments: args });
+    return response.result?.structuredContent ?? null;
+  }
+
+  async listTools(): Promise<string[]> {
+    const response = await this.send("tools/list", {});
+    return response.result.tools.map((t: { name: string }) => t.name);
+  }
+
   async close(): Promise<number | null> {
     this.proc.stdin!.end();
     return new Promise((resolve) => this.proc.once("exit", (code) => resolve(code)));
@@ -79,12 +90,27 @@ describe("neovim-use-mcp", () => {
     await client.close();
   }, 30000);
 
-  it("lists every tool", async () => {
-    const response = await client.send("tools/list", {});
-    const names = response.result.tools.map((t: { name: string }) => t.name);
+  it("lists the 10 minimal-tier tools by default", async () => {
+    const names = await client.listTools();
+    expect(names.length).toBe(10);
     expect(names).toContain("nvim_open_file");
+    expect(names).toContain("nvim_read_file");
+    expect(names).toContain("nvim_edit_lines");
+    expect(names).toContain("nvim_format");
     expect(names).toContain("nvim_rename_symbol");
-    expect(names.length).toBe(18);
+    expect(names).toContain("nvim_goto_definition");
+    expect(names).toContain("nvim_references");
+    expect(names).toContain("nvim_hover");
+    expect(names).toContain("nvim_code_actions");
+    expect(names).toContain("nvim_exec_lua");
+    expect(names).not.toContain("nvim_edit_text");
+    expect(names).not.toContain("nvim_insert_lines");
+    expect(names).not.toContain("nvim_save_buffer");
+    expect(names).not.toContain("nvim_diagnostics");
+    expect(names).not.toContain("nvim_list_buffers");
+    expect(names).not.toContain("nvim_document_symbols");
+    expect(names).not.toContain("nvim_workspace_symbols");
+    expect(names).not.toContain("nvim_command");
   });
 
   it("opens a file and reports the buffer", async () => {
@@ -124,6 +150,27 @@ describe("neovim-use-mcp", () => {
     expect(text).not.toContain("alpha");
   });
 
+  it("opens a file implicitly on read", async () => {
+    const implicit = join(dir, "implicit.txt");
+    writeFileSync(implicit, "uno\ndos\n");
+    const text = await client.call("nvim_read_file", { path: implicit });
+    expect(text).toContain("1  uno");
+    expect(text).toContain("2  dos");
+  });
+
+  it("opens a file implicitly on edit", async () => {
+    const implicit = join(dir, "implicit-edit.txt");
+    writeFileSync(implicit, "keep\nchange\n");
+    const text = await client.call("nvim_edit_lines", {
+      path: implicit,
+      start_line: 2,
+      end_line: 2,
+      text: "CHANGED",
+    });
+    expect(text).toContain("Saved.");
+    expect(readFileSync(implicit, "utf8")).toContain("CHANGED");
+  });
+
   it("replaces a line range and saves", async () => {
     await client.call("nvim_edit_lines", {
       path: file,
@@ -132,6 +179,21 @@ describe("neovim-use-mcp", () => {
       text: "BETA",
     });
     expect(readFileSync(file, "utf8")).toContain("BETA");
+  }, 20000);
+
+  it("returns structured feedback after an edit", async () => {
+    const structured = await client.callStructured("nvim_edit_lines", {
+      path: file,
+      start_line: 1,
+      end_line: 1,
+      text: "ALPHA",
+    });
+    expect(structured).not.toBeNull();
+    expect(structured.saved).toBe(true);
+    expect(typeof structured.line_count).toBe("number");
+    expect(structured.errors).toBe(0);
+    expect(structured.warnings).toBe(0);
+    expect(Array.isArray(structured.diagnostics)).toBe(true);
   }, 20000);
 
   it("replaces a line range with multiple lines", async () => {
@@ -151,62 +213,42 @@ describe("neovim-use-mcp", () => {
     expect(saved).toContain("three");
   }, 20000);
 
-  it("replaces exact text", async () => {
-    await client.call("nvim_edit_text", {
+  it("inserts before a line with start_line = end_line + 1", async () => {
+    const insert = join(dir, "insert-mode.txt");
+    writeFileSync(insert, "first\nsecond\n");
+    await client.call("nvim_edit_lines", {
+      path: insert,
+      start_line: 1,
+      end_line: 0,
+      text: "# header",
+    });
+    const saved = readFileSync(insert, "utf8");
+    expect(saved.startsWith("# header\n")).toBe(true);
+    expect(saved).toContain("first");
+  }, 20000);
+
+  it("rejects a reversed range", async () => {
+    const text = await client.call("nvim_edit_lines", {
       path: file,
-      old_text: "gamma",
-      new_text: "GAMMA",
+      start_line: 3,
+      end_line: 1,
+      text: "x",
     });
-    expect(readFileSync(file, "utf8")).toContain("GAMMA");
+    expect(text).toContain("must be start_line - 1");
   }, 20000);
 
-  it("reports missing text with a hint", async () => {
-    const text = await client.call("nvim_edit_text", {
-      path: file,
-      old_text: "absent",
-      new_text: "x",
-    });
-    expect(text).toContain("was not found");
-    expect(text).toContain("Hint:");
-  });
-
-  it("refuses an ambiguous replace", async () => {
-    const many = join(dir, "many.txt");
-    writeFileSync(many, "dup\ndup\n");
-    await client.call("nvim_open_file", { path: many, wait_ms: 0 });
-    const text = await client.call("nvim_edit_text", {
-      path: many,
-      old_text: "dup",
-      new_text: "x",
-    });
-    expect(text).toContain("appears 2 times");
-  }, 20000);
-
-  it("inserts lines", async () => {
-    await client.call("nvim_insert_lines", { path: file, line: 1, text: "# header" });
-    expect(readFileSync(file, "utf8").startsWith("# header")).toBe(true);
-  }, 20000);
-
-  it("keeps changes in the buffer when save is false", async () => {
+  it("saves the buffer by default after an edit", async () => {
     const staged = join(dir, "staged.txt");
     writeFileSync(staged, "one\n");
-    await client.call("nvim_open_file", { path: staged, wait_ms: 0 });
     await client.call("nvim_edit_lines", {
       path: staged,
       start_line: 1,
       end_line: 1,
       text: "two",
-      save: false,
     });
-    expect(readFileSync(staged, "utf8")).toContain("one");
-    await client.call("nvim_save_buffer", { path: staged });
     expect(readFileSync(staged, "utf8")).toContain("two");
   }, 30000);
 
-  it("lists buffers", async () => {
-    const text = await client.call("nvim_list_buffers", {});
-    expect(text).toContain("demo.txt");
-  });
 
   it("edit does not trigger format-on-save autocmds (no whole-file reformat)", async () => {
     // Set up a file with multiple lines.
@@ -246,6 +288,124 @@ describe("neovim-use-mcp", () => {
   it("runs Lua", async () => {
     const text = await client.call("nvim_exec_lua", { code: "return 1 + 1" });
     expect(text.trim()).toBe("2");
+  });
+});
+
+describe("neovim-use-mcp full tier", () => {
+  let client: Client;
+  let dir: string;
+  let file: string;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), "nvim-mcp-full-"));
+    file = join(dir, "demo.txt");
+    writeFileSync(file, "alpha\nbeta\ngamma\n");
+    client = new Client(dir, ["--tools", "full"]);
+    await client.send("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "vitest", version: "0" },
+    });
+    client.notify("notifications/initialized", {});
+  }, 60000);
+
+  afterAll(async () => {
+    await client.close();
+  }, 30000);
+
+  it("lists all 18 tools with --tools full", async () => {
+    const names = await client.listTools();
+    expect(names.length).toBe(18);
+    expect(names).toContain("nvim_edit_text");
+    expect(names).toContain("nvim_insert_lines");
+    expect(names).toContain("nvim_save_buffer");
+    expect(names).toContain("nvim_diagnostics");
+    expect(names).toContain("nvim_list_buffers");
+    expect(names).toContain("nvim_document_symbols");
+    expect(names).toContain("nvim_workspace_symbols");
+    expect(names).toContain("nvim_command");
+  });
+
+  it("replaces exact text", async () => {
+    await client.call("nvim_edit_text", {
+      path: file,
+      old_text: "gamma",
+      new_text: "GAMMA",
+    });
+    expect(readFileSync(file, "utf8")).toContain("GAMMA");
+  }, 20000);
+
+  it("replaces multi-line text", async () => {
+    const multi = join(dir, "ml.txt");
+    writeFileSync(multi, "head\none\ntwo\ntail\n");
+    await client.call("nvim_edit_text", {
+      path: multi,
+      old_text: "one\ntwo",
+      new_text: "ONE\nTWO",
+    });
+    const saved = readFileSync(multi, "utf8");
+    expect(saved).toContain("ONE\nTWO");
+    expect(saved).toContain("head");
+    expect(saved).toContain("tail");
+  }, 20000);
+
+  it("matches with indentation drift and preserves the file indent", async () => {
+    const drift = join(dir, "drift.txt");
+    writeFileSync(drift, "function f() {\n    return 1;\n}\n");
+    await client.call("nvim_edit_text", {
+      path: drift,
+      old_text: "return 1;",
+      new_text: "return 2;",
+    });
+    const saved = readFileSync(drift, "utf8");
+    expect(saved).toContain("    return 2;");
+  }, 20000);
+
+  it("reports missing text with a hint", async () => {
+    const text = await client.call("nvim_edit_text", {
+      path: file,
+      old_text: "absent",
+      new_text: "x",
+    });
+    expect(text).toContain("was not found");
+    expect(text).toContain("Hint:");
+  });
+
+  it("refuses an ambiguous replace", async () => {
+    const many = join(dir, "many.txt");
+    writeFileSync(many, "dup\ndup\n");
+    await client.call("nvim_open_file", { path: many, wait_ms: 0 });
+    const text = await client.call("nvim_edit_text", {
+      path: many,
+      old_text: "dup",
+      new_text: "x",
+    });
+    expect(text).toContain("appears 2 times");
+  }, 20000);
+
+  it("inserts lines", async () => {
+    await client.call("nvim_insert_lines", { path: file, line: 1, text: "# header" });
+    expect(readFileSync(file, "utf8").startsWith("# header")).toBe(true);
+  }, 20000);
+
+  it("keeps changes in the buffer when save is false, then saves", async () => {
+    const staged = join(dir, "staged.txt");
+    writeFileSync(staged, "one\n");
+    await client.call("nvim_edit_lines", {
+      path: staged,
+      start_line: 1,
+      end_line: 1,
+      text: "two",
+      save: false,
+    });
+    expect(readFileSync(staged, "utf8")).toContain("one");
+    await client.call("nvim_save_buffer", { path: staged });
+    expect(readFileSync(staged, "utf8")).toContain("two");
+  }, 30000);
+
+  it("lists buffers", async () => {
+    const text = await client.call("nvim_list_buffers", {});
+    expect(text).toContain("demo.txt");
   });
 
   it("runs an Ex command", async () => {

@@ -10,7 +10,8 @@ import {
   type Diagnostic,
 } from "../util/format.js";
 import { describeError, ToolError } from "../util/errors.js";
-import { ensureOpen, type ToolContext } from "./context.js";
+import { editFeedback, ensureOpen, type ToolContext } from "./context.js";
+import type { ToolTier } from "../util/config.js";
 
 interface Location {
   path: string;
@@ -46,40 +47,53 @@ function checkLsp(value: unknown, what: string): void {
   if (error) throw new ToolError(`${what} failed: ${error}`);
 }
 
-export function registerLspTools(server: McpServer, ctx: ToolContext): void {
-  server.registerTool(
-    "nvim_diagnostics",
-    {
-      title: "Get LSP diagnostics",
-      description:
-        "Get LSP errors and warnings for one file, or for every open buffer when path " +
-        "is omitted. Use this to check work after an edit.",
-      inputSchema: {
-        path: z.string().optional().describe("File path; omit for all open buffers"),
-        severity: z
-          .enum(["error", "warn", "info", "hint"])
-          .optional()
-          .describe("Lowest severity to report, default hint"),
-        wait_ms: z.number().int().min(0).max(30000).optional().describe("Settle time"),
+const FULL_NOTE = "Full-tier tool. Enable with --tools full.";
+
+/** Register the LSP tools. The tier picks which tools load: minimal is the
+ * default daily loop; full adds diagnostics sweeps and symbol outlines. */
+export function registerLspTools(
+  server: McpServer,
+  ctx: ToolContext,
+  tier: ToolTier = "minimal",
+): void {
+  const full = tier === "full";
+
+  if (full) {
+    server.registerTool(
+      "nvim_diagnostics",
+      {
+        title: "Get LSP diagnostics",
+        description:
+          `${FULL_NOTE} Get LSP errors and warnings for one file, or for every open ` +
+          "buffer when path is omitted. Edit tools already return diagnostics, so " +
+          "this is for an all-buffer sweep.",
+        inputSchema: {
+          path: z.string().optional().describe("File path; omit for all open buffers"),
+          severity: z
+            .enum(["error", "warn", "info", "hint"])
+            .optional()
+            .describe("Lowest severity to report, default hint"),
+          wait_ms: z.number().int().min(0).max(30000).optional().describe("Settle time"),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-    },
-    async ({ path, severity, wait_ms }) => {
-      try {
-        if (path) await ensureOpen(ctx, path);
-        const result = await ctx.session.lua<Diagnostic[]>(lua.DIAGNOSTICS, [
-          path ?? "",
-          severity ?? "hint",
-          wait_ms ?? 500,
-        ]);
-        checkLsp(result, "diagnostics");
-        const items = result ?? [];
-        return ok(renderDiagnostics(items), { diagnostics: items, count: items.length });
-      } catch (error) {
-        return fail(describeError(error));
-      }
-    },
-  );
+      async ({ path, severity, wait_ms }) => {
+        try {
+          if (path) await ensureOpen(ctx, path);
+          const result = await ctx.session.lua<Diagnostic[]>(lua.DIAGNOSTICS, [
+            path ?? "",
+            severity ?? "hint",
+            wait_ms ?? ctx.config.diagWaitMs,
+          ]);
+          checkLsp(result, "diagnostics");
+          const items = result ?? [];
+          return ok(renderDiagnostics(items), { diagnostics: items, count: items.length });
+        } catch (error) {
+          return fail(describeError(error));
+        }
+      },
+    );
+  }
 
   const positionSchema = {
     path: z.string().describe("File path"),
@@ -204,10 +218,12 @@ export function registerLspTools(server: McpServer, ctx: ToolContext): void {
               `and that its language server supports rename.`,
           );
         }
+        const feedback = await editFeedback(ctx, path, true);
         return ok(
           `Renamed to "${new_name}" in ${files.length} file(s):\n` +
-            files.map((f) => shortPath(f)).join("\n"),
-          result,
+            files.map((f) => shortPath(f)).join("\n") +
+            `\n${feedback.text}`,
+          { ...result, ...feedback.structured },
         );
       } catch (error) {
         return fail(describeError(error));
@@ -248,7 +264,13 @@ export function registerLspTools(server: McpServer, ctx: ToolContext): void {
         }
         checkLsp(result, "code actions");
           const applied = result.applied as string | undefined;
-          if (applied) return ok(`Applied and saved: ${applied}`, result);
+          if (applied) {
+            const feedback = await editFeedback(ctx, path, true);
+            return ok(`Applied and saved: ${applied}\n${feedback.text}`, {
+              ...result,
+              ...feedback.structured,
+            });
+          }
           const actions = (result.actions as { index: number; title: string; kind?: string }[]) ?? [];
           if (actions.length === 0) return ok("No code actions at that position.");
           const text = actions
@@ -289,10 +311,11 @@ export function registerLspTools(server: McpServer, ctx: ToolContext): void {
           wait_ms ?? 5000,
         ]);
         checkLsp(result, "format");
+        const feedback = await editFeedback(ctx, path, true);
         return ok(
           `Formatted and saved ${shortPath(String(result.path))} ` +
-            `(${result.line_count} lines).`,
-          result,
+            `(${result.line_count} lines).\n${feedback.text}`,
+          { ...result, ...feedback.structured },
         );
       } catch (error) {
         return fail(describeError(error));
@@ -300,78 +323,84 @@ export function registerLspTools(server: McpServer, ctx: ToolContext): void {
     },
   );
 
-  server.registerTool(
-    "nvim_document_symbols",
-    {
-      title: "Outline a file",
-      description:
-        "List the symbol outline of a file: classes, functions and fields with their " +
-        "line numbers. Cheaper than reading the whole file.",
-      inputSchema: {
-        path: z.string().describe("File path"),
-        wait_ms: z.number().int().min(0).max(30000).optional().describe("LSP timeout"),
+  if (full) {
+    server.registerTool(
+      "nvim_document_symbols",
+      {
+        title: "Outline a file",
+        description:
+          `${FULL_NOTE} List the symbol outline of a file: classes, functions and ` +
+          "fields with their line numbers. Cheaper than reading the whole file.",
+        inputSchema: {
+          path: z.string().describe("File path"),
+          wait_ms: z.number().int().min(0).max(30000).optional().describe("LSP timeout"),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-    },
-    async ({ path, wait_ms }) => {
-      try {
-        await ensureOpen(ctx, path);
-        const result = await ctx.session.lua<
-          { name: string; kind: string; line: number; depth: number; detail?: string }[]
-        >(lua.LSP_DOCUMENT_SYMBOLS, [path, wait_ms ?? ctx.config.lspWaitMs]);
-        checkLsp(result, "document symbols");
-        if (!result || result.length === 0) return ok("No symbols found.");
-        const text = result
-          .map(
-            (s) =>
-              `${"  ".repeat(s.depth)}${s.line}: ${s.kind} ${s.name}` +
-              (s.detail ? `  ${s.detail}` : ""),
-          )
-          .join("\n");
-        return ok(text, { symbols: result });
-      } catch (error) {
-        return fail(describeError(error));
-      }
-    },
-  );
-
-  server.registerTool(
-    "nvim_workspace_symbols",
-    {
-      title: "Search workspace symbols",
-      description:
-        "Search symbols across the whole project through the LSP. Use this to find a " +
-        "definition by name without knowing the file.",
-      inputSchema: {
-        query: z.string().describe("Symbol name or prefix"),
-        wait_ms: z.number().int().min(0).max(30000).optional().describe("LSP timeout"),
-      },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-    },
-    async ({ query, wait_ms }) => {
-      try {
-        const result = await ctx.session.lua<
-          { name: string; kind: string; path?: string; line?: number; container?: string }[]
-        >(lua.LSP_WORKSPACE_SYMBOLS, [query, wait_ms ?? 5000]);
-        checkLsp(result, "workspace symbols");
-        if (!result || result.length === 0) {
-          return ok(
-            "No symbols found. Open a project file with nvim_open_file first, so a " +
-              "language server attaches to the workspace.",
-          );
+      async ({ path, wait_ms }) => {
+        try {
+          await ensureOpen(ctx, path);
+          const result = await ctx.session.lua<
+            { name: string; kind: string; line: number; depth: number; detail?: string }[]
+          >(lua.LSP_DOCUMENT_SYMBOLS, [path, wait_ms ?? ctx.config.lspWaitMs]);
+          checkLsp(result, "document symbols");
+          if (!result || result.length === 0) return ok("No symbols found.");
+          const text = result
+            .map(
+              (s) =>
+                `${"  ".repeat(s.depth)}${s.line}: ${s.kind} ${s.name}` +
+                (s.detail ? `  ${s.detail}` : ""),
+            )
+            .join("\n");
+          return ok(text, { symbols: result });
+        } catch (error) {
+          return fail(describeError(error));
         }
-        const text = result
-          .map(
-            (s) =>
-              `${s.kind} ${s.name}` +
-              (s.container ? ` in ${s.container}` : "") +
-              (s.path ? `  ${shortPath(s.path)}:${s.line}` : ""),
-          )
-          .join("\n");
-        return ok(text, { symbols: result });
-      } catch (error) {
-        return fail(describeError(error));
-      }
-    },
-  );
+      },
+    );
+
+    server.registerTool(
+      "nvim_workspace_symbols",
+      {
+        title: "Search workspace symbols",
+        description:
+          `${FULL_NOTE} Search symbols across the whole project through the LSP. Use ` +
+          "this to find a definition by name without knowing the file.",
+        inputSchema: {
+          query: z.string().describe("Symbol name or prefix"),
+          path: z
+            .string()
+            .optional()
+            .describe("Optional file path to anchor the LSP workspace"),
+          wait_ms: z.number().int().min(0).max(30000).optional().describe("LSP timeout"),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      },
+      async ({ query, path, wait_ms }) => {
+        try {
+          const result = await ctx.session.lua<
+            { name: string; kind: string; path?: string; line?: number; container?: string }[]
+          >(lua.LSP_WORKSPACE_SYMBOLS, [query, wait_ms ?? 5000, path ?? null]);
+          checkLsp(result, "workspace symbols");
+          if (!result || result.length === 0) {
+            return ok(
+              "No symbols found. Open a project file with nvim_open_file first, so a " +
+                "language server attaches to the workspace.",
+            );
+          }
+          const text = result
+            .map(
+              (s) =>
+                `${s.kind} ${s.name}` +
+                (s.container ? ` in ${s.container}` : "") +
+                (s.path ? `  ${shortPath(s.path)}:${s.line}` : ""),
+            )
+            .join("\n");
+          return ok(text, { symbols: result });
+        } catch (error) {
+          return fail(describeError(error));
+        }
+      },
+    );
+  }
 }

@@ -169,42 +169,47 @@ Three rules make the results much better:
 
 ## Tools
 
-### Buffer and file
+The server loads one of two tiers. The `--tools` flag picks the tier.
+`minimal` is the default and loads the 10 tools an agent runs all day.
+`full` loads all 18 tools. No tool is deleted; the tier only decides what
+loads into the agent's context.
+
+### Minimal tier (default, 10 tools)
 
 | Tool | Arguments | Purpose |
 |---|---|---|
-| `nvim_open_file` | `path` (string or array), `wait_ms?` | Open files and start their LSP clients |
+| `nvim_open_file` | `path` (string or array), `wait_ms?` | Pre-warm files or tune the LSP wait. Other tools open files on demand |
 | `nvim_read_file` | `path`, `start_line?`, `end_line?` | Read numbered lines |
-| `nvim_edit_lines` | `path`, `start_line`, `end_line`, `text`, `save?` | Replace a line range |
-| `nvim_edit_text` | `path`, `old_text`, `new_text`, `replace_all?`, `save?` | Replace exact text |
-| `nvim_insert_lines` | `path`, `line`, `text`, `save?` | Insert text before a line |
-| `nvim_save_buffer` | `path` | Write a buffer (no format-on-save autocmds) |
-| `nvim_list_buffers` | — | List open buffers |
-
-### LSP
-
-| Tool | Arguments | Purpose |
-|---|---|---|
-| `nvim_diagnostics` | `path?`, `severity?`, `wait_ms?` | Errors and warnings |
+| `nvim_edit_lines` | `path`, `start_line`, `end_line`, `text`, `save?` | Replace a range, or insert before a line with `start_line = end_line + 1`. The default edit tool |
+| `nvim_format` | `path`, `start_line?`, `end_line?` | Format a file or a range |
+| `nvim_rename_symbol` | `path`, `line`, `column`, `new_name` | Rename across the workspace |
 | `nvim_goto_definition` | `path`, `line`, `column`, `wait_ms?` | Find a definition |
 | `nvim_references` | `path`, `line`, `column`, `wait_ms?` | Find every reference |
 | `nvim_hover` | `path`, `line`, `column`, `wait_ms?` | Type and documentation |
-| `nvim_rename_symbol` | `path`, `line`, `column`, `new_name` | Rename across the workspace |
 | `nvim_code_actions` | `path`, `line`, `column`, `apply_index?` | List or apply a quick fix |
-| `nvim_format` | `path`, `start_line?`, `end_line?` | Format a file or a range |
-| `nvim_document_symbols` | `path`, `wait_ms?` | Outline a file |
-| `nvim_workspace_symbols` | `query`, `wait_ms?` | Search symbols in the project |
+| `nvim_exec_lua` | `code`, `args?` | Run Lua inside Neovim |
 
-Lines and columns start at 1.
-
-### Escape hatches
+### Full tier adds (8 tools)
 
 | Tool | Arguments | Purpose |
 |---|---|---|
-| `nvim_exec_lua` | `code`, `args?` | Run Lua inside Neovim |
+| `nvim_edit_text` | `path`, `old_text`, `new_text`, `replace_all?`, `save?` | Replace exact text. Tolerates whitespace drift and preserves indentation |
+| `nvim_insert_lines` | `path`, `line`, `text`, `save?` | Insert text before a line. Prefer `nvim_edit_lines` insert mode |
+| `nvim_save_buffer` | `path` | Write a buffer (no format-on-save autocmds) |
+| `nvim_diagnostics` | `path?`, `severity?`, `wait_ms?` | Errors and warnings for one file or all buffers |
+| `nvim_list_buffers` | — | List open buffers |
+| `nvim_document_symbols` | `path`, `wait_ms?` | Outline a file |
+| `nvim_workspace_symbols` | `query`, `path?`, `wait_ms?` | Search symbols in the project |
 | `nvim_command` | `command` | Run an Ex command, for example a plugin command |
 
-These two tools run any code. Turn them off with `--no-exec` if the agent is
+Lines and columns start at 1.
+
+Edit tools save the buffer by default and return fresh diagnostics, both as
+text and as a structured payload: `{ saved, line_count, errors, warnings,
+infos, diagnostics[] }`.
+
+`nvim_exec_lua` runs any code. Turn it off with `--no-exec` if the agent is
+not trusted.
 not trusted.
 
 ---
@@ -258,57 +263,68 @@ Command line flags win over environment variables.
 | `--nvim` | `NVIM_MCP_BIN` | `nvim` | Path to the nvim binary |
 | `--config-mode` | `NVIM_MCP_CONFIG_MODE` | `user` | `user` loads your config; `minimal` runs `nvim --clean` |
 | `--no-exec` | `NVIM_MCP_ALLOW_EXEC=0` | exec on | Turn off `nvim_exec_lua` and `nvim_command` |
+| `--tools` | `NVIM_MCP_TOOLS` | `minimal` | `minimal` loads 10 tools; `full` loads all 18 |
 | `--cwd` | `NVIM_MCP_CWD` | process cwd | Project root for the LSP |
 | `--lsp-wait-ms` | `NVIM_MCP_LSP_WAIT_MS` | `3000` | Default LSP wait |
-| `--max-lines` | `NVIM_MCP_MAX_LINES` | `2000` | Line cap for a read |
+| `--diag-wait-ms` | `NVIM_MCP_DIAG_WAIT_MS` | `500` | Diagnostics settle wait after an edit; floor 250 |
 | `--debug` | `NVIM_MCP_DEBUG` | off | Debug lines on stderr |
 
 ### Watch the agent work
 
 Attach mode shows you every edit in your own window, live.
 
-```bash
-# terminal 1
-nvim --listen /tmp/nvim.sock
+## Recipes
 
-# agent config
-node dist/index.js --socket /tmp/nvim.sock
+### Fix every error in a file
+
+```
+nvim_read_file    path=src/app.ts                          # implicit open
+nvim_edit_lines   path=src/app.ts start_line=42 end_line=42 text="..."
+                                                            # feedback carries diagnostics
+nvim_code_actions path=src/app.ts line=42 column=9 apply_index=1
 ```
 
-In attach mode the server does not stop your Neovim on exit.
+### Rename a symbol everywhere
 
-The default is `embedded`, always. The server spawns its own headless Neovim
-and owns it. A socket in the environment does not change the mode, so the
-server does not take over your editor when the agent runs in a Neovim
-terminal. Ask for attach mode with `--socket` or `--mode attach`.
+```
+nvim_rename_symbol  path=src/util/format.ts line=28 column=17 new_name=renderIssues
+```
 
----
+The tool returns the list of files that it changed and saved.
 
-## How lazy plugins load
+### Insert before a line
 
-Headless Neovim never fires `UIEnter` or `VeryLazy`, so a lazy.nvim setup keeps
-`nvim-lspconfig` and `mason` asleep, and no language server attaches. On start
-the server fires the `VeryLazy` event and forces those plugins to load. It then
-waits for the client count to stay stable, so a slow real language server is not
-missed behind a fast linter bridge.
+```
+nvim_edit_lines path=src/app.ts start_line=5 end_line=4 text="import { join } from \"node:path\";"
+```
 
----
+`start_line = end_line + 1` means insert before `start_line`.
 
-## Troubleshooting
+### Stage several edits, then save once (full tier)
 
-### When no LSP attaches
+```
+nvim_edit_lines  path=src/a.ts start_line=10 end_line=10 text="..." save=false
+nvim_edit_lines  path=src/a.ts start_line=20 end_line=20 text="..." save=false
+nvim_save_buffer path=src/a.ts
+```
 
-`nvim_open_file` reports `No LSP client attached`. Try these steps in order.
+### Run a plugin command (full tier)
 
-1. Confirm the file type is correct. The tool prints it. An empty file type
-   means Neovim did not detect the language.
-2. Raise the wait: `nvim_open_file path=... wait_ms=10000`. A cold TypeScript
-   or Rust server needs more than 3 seconds.
-3. Check that `NVIM_MCP_CWD` points at the project root. A server that cannot
-   find `tsconfig.json` does not start.
-4. Start the server with `--debug` and read stderr. It prints which plugins
-   the warm-up loaded.
-5. Confirm the server starts in your own Neovim for the same file.
+```
+nvim_command command="Telescope find_files"
+nvim_exec_lua code="return vim.fn.getcwd()"
+```
+
+### A tool is missing
+
+The minimal tier loads 10 tools. Start the server with `--tools full` to load
+all 18. Full-tier tool descriptions start with "Full-tier tool".
+
+### A language server does not attach
+
+1. Check that the file type has a language server in your Neovim config.
+2. Call `nvim_open_file` with a longer `wait_ms`, for example `10000`.
+3. Confirm the server starts in your own Neovim for the same file.
 
 ### The server does not start
 
@@ -321,7 +337,7 @@ NVIM_MCP_DEBUG=1 node dist/index.js
 A healthy start prints:
 
 ```
-[nvim-mcp] ready (mode=embedded, exec=true, cwd=/your/project)
+[nvim-mcp] ready (mode=embedded, tools=minimal, exec=true, cwd=/your/project)
 ```
 
 ### A plugin breaks headless Neovim

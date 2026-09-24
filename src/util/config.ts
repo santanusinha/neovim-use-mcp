@@ -5,9 +5,11 @@ import { resolve } from "node:path";
 
 export type NvimMode = "embedded" | "attach";
 export type ConfigMode = "user" | "minimal";
+export type ToolTier = "minimal" | "full";
 
 const MODES = ["embedded", "attach"] as const;
 const CONFIG_MODES = ["user", "minimal"] as const;
+const TIERS = ["minimal", "full"] as const;
 
 /** Embedded is the default: the server owns its own Neovim process. */
 export const DEFAULT_MODE: NvimMode = "embedded";
@@ -23,12 +25,14 @@ export interface ServerConfig {
   configMode: ConfigMode;
   /** Allow nvim_exec_lua and nvim_command. */
   allowExec: boolean;
+  /** Tool tier: minimal loads 10 tools, full loads all 18. */
+  tools: ToolTier;
   /** Working directory used as the LSP root. */
   cwd: string;
   /** Default milliseconds to wait for LSP to settle. */
   lspWaitMs: number;
-  /** Maximum lines a read tool returns in one call. */
-  maxLines: number;
+  /** Milliseconds to wait for diagnostics to settle after an edit. */
+  diagWaitMs: number;
   /** Write debug lines to stderr. */
   debug: boolean;
 }
@@ -90,9 +94,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
     nvimPath: envPath("NVIM_MCP_BIN") ?? "nvim",
     configMode: envEnum("NVIM_MCP_CONFIG_MODE", CONFIG_MODES, "user"),
     allowExec: envFlag("NVIM_MCP_ALLOW_EXEC", true),
+    tools: envEnum("NVIM_MCP_TOOLS", TIERS, "minimal"),
     cwd: envPath("NVIM_MCP_CWD") ?? process.cwd(),
     lspWaitMs: envInt("NVIM_MCP_LSP_WAIT_MS", 3000),
-    maxLines: envInt("NVIM_MCP_MAX_LINES", 2000),
+    diagWaitMs: envInt("NVIM_MCP_DIAG_WAIT_MS", 500),
     debug: envFlag("NVIM_MCP_DEBUG", false),
   };
 
@@ -119,14 +124,17 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
       case "--no-exec":
         config.allowExec = false;
         break;
+      case "--tools":
+        config.tools = pickFlag("--tools", argv[i++], TIERS);
+        break;
       case "--cwd":
         config.cwd = argv[i++];
         break;
       case "--lsp-wait-ms":
         config.lspWaitMs = Number.parseInt(argv[i++], 10);
         break;
-      case "--max-lines":
-        config.maxLines = Number.parseInt(argv[i++], 10);
+      case "--diag-wait-ms":
+        config.diagWaitMs = Number.parseInt(argv[i++], 10);
         break;
       case "--debug":
         config.debug = true;

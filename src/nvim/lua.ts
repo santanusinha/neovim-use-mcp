@@ -78,16 +78,22 @@ end
 return out
 `;
 
-/** Open a file, attach LSP, and report buffer facts. */
-export const OPEN_FILE = `
-local path, wait_ms = ...
-local abs = vim.fn.fnamemodify(path, ":p")
-if vim.fn.filereadable(abs) == 0 and vim.fn.isdirectory(abs) == 1 then
-  return { error = "path is a directory: " .. abs }
-end
-vim.cmd("edit " .. vim.fn.fnameescape(abs))
-local buf = vim.api.nvim_get_current_buf()
-vim.bo[buf].buflisted = true
+  /** Open a file, attach LSP, and report buffer facts. */
+  export const OPEN_FILE = `
+  local path, wait_ms = ...
+  local abs = vim.fn.fnamemodify(path, ":p")
+  if vim.fn.filereadable(abs) == 0 and vim.fn.isdirectory(abs) == 1 then
+    return { error = "path is a directory: " .. abs }
+  end
+  -- An open buffer for this path may already exist (implicit open). Reuse it
+  -- and never run "edit" on a modified buffer: that would discard unsaved
+  -- changes or raise E37. Only load the file when no buffer holds it yet.
+  local buf = vim.fn.bufnr(abs)
+  if buf == -1 then
+    vim.cmd("edit " .. vim.fn.fnameescape(abs))
+    buf = vim.api.nvim_get_current_buf()
+  end
+  vim.bo[buf].buflisted = true
 
 -- Fast path. The buffer is already open with clients, so skip the wait loop.
 local existing = vim.lsp.get_clients({ bufnr = buf })
@@ -158,25 +164,30 @@ return {
 }
 `;
 
-/** Replace a line range with new text. */
-export const SET_LINES = String.raw`
-local path, start_line, end_line, text = ...
-local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
-if buf == -1 then return { error = "not_open" } end
-local total = vim.api.nvim_buf_line_count(buf)
-if start_line < 1 or start_line > total + 1 then
-  return { error = "start_line " .. start_line .. " is out of range 1.." .. (total + 1) }
-end
-local new_lines = vim.split(text, "\n", { plain = true })
-if text == "" then new_lines = {} end
-vim.api.nvim_buf_set_lines(buf, start_line - 1, end_line, false, new_lines)
-return {
-  buffer = buf,
-  replaced_from = start_line,
-  replaced_to = end_line,
-  new_line_count = vim.api.nvim_buf_line_count(buf),
-}
-`;
+  /** Replace a line range, or insert before a line with start_line == end_line + 1. */
+  export const SET_LINES = String.raw`
+  local path, start_line, end_line, text = ...
+  local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
+  if buf == -1 then return { error = "not_open" } end
+  local total = vim.api.nvim_buf_line_count(buf)
+  if end_line < start_line - 1 then
+    return { error = "end_line " .. end_line .. " must be start_line - 1 (insert) or >= start_line" }
+  end
+  if start_line < 1 or start_line > total + 1 then
+    return { error = "start_line " .. start_line .. " is out of range 1.." .. (total + 1) }
+  end
+  local new_lines = vim.split(text, "\n", { plain = true })
+  if text == "" then new_lines = {} end
+  vim.api.nvim_buf_set_lines(buf, start_line - 1, end_line, false, new_lines)
+  local mode = (end_line == start_line - 1) and "insert" or "replace"
+  return {
+    buffer = buf,
+    mode = mode,
+    replaced_from = start_line,
+    replaced_to = end_line,
+    new_line_count = vim.api.nvim_buf_line_count(buf),
+  }
+  `;
 
 /** Insert lines before a given line number. */
 export const INSERT_LINES = String.raw`
@@ -190,40 +201,108 @@ vim.api.nvim_buf_set_lines(buf, at, at, false, new_lines)
 return { buffer = buf, inserted_at = at + 1, new_line_count = vim.api.nvim_buf_line_count(buf) }
 `;
 
-/** Replace exact text once, or report the match count. */
-export const REPLACE_TEXT = String.raw`
-local path, old_text, new_text, replace_all = ...
-local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
-if buf == -1 then return { error = "not_open" } end
-local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-local content = table.concat(lines, "\\n")
-local count = 0
-local search_start = 1
-while true do
-  local s = string.find(content, old_text, search_start, true)
-  if not s then break end
-  count = count + 1
-  search_start = s + #old_text
-end
-if count == 0 then return { error = "no_match", count = 0 } end
-if count > 1 and not replace_all then return { error = "many_matches", count = count } end
-
-local out = {}
-local pos = 1
-while true do
-  local s, e = string.find(content, old_text, pos, true)
-  if not s then break end
-  out[#out + 1] = string.sub(content, pos, s - 1)
-  out[#out + 1] = new_text
-  pos = e + 1
-  if not replace_all then break end
-end
-out[#out + 1] = string.sub(content, pos)
-local updated = table.concat(out)
-vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(updated, "\\n", { plain = true }))
-return { buffer = buf, replacements = replace_all and count or 1,
-  new_line_count = vim.api.nvim_buf_line_count(buf) }
-`;
+  /** Replace exact text once, with CRLF normalisation, whitespace-tolerant
+   * fallback matching, indentation preservation, and a closest-match hint. */
+  export const REPLACE_TEXT = String.raw`
+  local path, old_text, new_text, replace_all = ...
+  local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
+  if buf == -1 then return { error = "not_open" } end
+  local function normalise(s)
+    return (string.gsub(s, "\r\n", "\n"):gsub("\r", "\n"))
+  end
+  local function trailing(s) return (s:gsub("[ \t]+$", "")) end
+  local function leading(s) return (s:gsub("^[ \t]+", "")) end
+  local function split_lines(s)
+    local t = {}
+    for line in (normalise(s) .. "\n"):gmatch("(.-)\n") do t[#t + 1] = line end
+    if normalise(s) == "" then t = {} end
+    return t
+  end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local n_lines = #lines
+  local needle = split_lines(old_text)
+  local replacement = split_lines(new_text)
+  local n_needle = #needle
+  if n_needle == 0 then return { error = "empty_old_text" } end
+  local tier, matches = 1, {}
+  -- Tier 1: exact per-line match.
+  for i = 1, n_lines - n_needle + 1 do
+    local ok = true
+    for j = 0, n_needle - 1 do
+      if lines[i + j] ~= needle[j + 1] then ok = false break end
+    end
+    if ok then matches[#matches + 1] = { start = i, tier = 1 } end
+  end
+  -- Tier 2: trailing-whitespace-insensitive match.
+  if #matches == 0 then
+    tier = 2
+    local hay, need = {}, {}
+    for i, l in ipairs(lines) do hay[i] = trailing(l) end
+    for i, l in ipairs(needle) do need[i] = trailing(l) end
+    for i = 1, n_lines - n_needle + 1 do
+      local ok = true
+      for j = 0, n_needle - 1 do
+        if hay[i + j] ~= need[j + 1] then ok = false break end
+      end
+      if ok then matches[#matches + 1] = { start = i, tier = 2 } end
+    end
+  end
+  -- Tier 3: leading-whitespace-insensitive match (indentation drift).
+  if #matches == 0 then
+    tier = 3
+    local hay, need = {}, {}
+    for i, l in ipairs(lines) do hay[i] = leading(trailing(l)) end
+    for i, l in ipairs(needle) do need[i] = leading(trailing(l)) end
+    for i = 1, n_lines - n_needle + 1 do
+      local ok = true
+      for j = 0, n_needle - 1 do
+        if hay[i + j] ~= need[j + 1] then ok = false break end
+      end
+      if ok then matches[#matches + 1] = { start = i, tier = 3 } end
+    end
+  end
+  local count = #matches
+  if count == 0 then
+    -- Closest-match hint: best line-window by equal lines, then char similarity.
+    local best, best_score = nil, -1
+    for i = 1, math.max(1, n_lines - n_needle + 1) do
+      local same = 0
+      for j = 0, n_needle - 1 do
+        local a, b = lines[i + j] or "", needle[j + 1] or ""
+        if a == b then same = same + 1 end
+      end
+      if same > best_score then best, best_score = i, same end
+    end
+    local hint_lines = {}
+    for j = 0, n_needle - 1 do
+      hint_lines[#hint_lines + 1] = lines[(best or 1) + j] or ""
+    end
+    return { error = "no_match", count = 0, closest_line = best, closest_text = table.concat(hint_lines, "\n") }
+  end
+  if count > 1 and not replace_all then
+    local at = {}
+    for _, m in ipairs(matches) do at[#at + 1] = m.start end
+    return { error = "many_matches", count = count, lines = at }
+  end
+  -- Indentation preservation: on tier 2/3, apply the file's original leading
+  -- whitespace of the first matched line to every replacement line.
+  if tier > 1 and n_needle > 0 then
+    local first = lines[matches[1].start] or ""
+    local indent = string.match(first, "^[ \t]*")
+    for i, l in ipairs(replacement) do
+      replacement[i] = indent .. leading(trailing(l))
+    end
+  end
+  -- Splice: keep lines before the match, insert replacement, keep lines after.
+  local last = matches[count].start
+  local out = {}
+  for i = 1, matches[1].start - 1 do out[#out + 1] = lines[i] end
+  for _, l in ipairs(replacement) do out[#out + 1] = l end
+  for i = last + n_needle, n_lines do out[#out + 1] = lines[i] end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
+  return { buffer = buf, replacements = count, match_tier = tier,
+    new_line_count = vim.api.nvim_buf_line_count(buf) }
+  `;
 
 /** Save a buffer without firing BufWritePre autocmds (no formatter side-effect). */
 export const SAVE_BUFFER = `
@@ -501,11 +580,12 @@ return { path = vim.api.nvim_buf_get_name(buf), line_count = vim.api.nvim_buf_li
 `;
 
 /** Document symbol outline. */
-export const LSP_DOCUMENT_SYMBOLS = `
-local path, wait_ms = ...
-local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
-if buf == -1 then return { error = "not_open" } end
-if #vim.lsp.get_clients({ bufnr = buf }) == 0 then return { error = "no_lsp" } end
+  /** Document symbol outline. */
+  export const LSP_DOCUMENT_SYMBOLS = `
+  local path, wait_ms = ...
+  local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
+  if buf == -1 then return { error = "not_open" } end
+  if #vim.lsp.get_clients({ bufnr = buf }) == 0 then return { error = "no_lsp" } end
 local params = { textDocument = { uri = vim.uri_from_bufnr(buf) } }
 local results = vim.lsp.buf_request_sync(buf, "textDocument/documentSymbol", params, wait_ms or 3000)
 if not results then return { error = "lsp_timeout" } end
@@ -530,25 +610,39 @@ return out
 `;
 
 /** Workspace symbol search. */
-export const LSP_WORKSPACE_SYMBOLS = `
-local query, wait_ms = ...
-local buf = vim.api.nvim_get_current_buf()
-if #vim.lsp.get_clients() == 0 then return { error = "no_lsp" } end
-local results = vim.lsp.buf_request_sync(buf, "workspace/symbol", { query = query }, wait_ms or 5000)
-if not results then return { error = "lsp_timeout" } end
-local kinds = vim.lsp.protocol.SymbolKind
-local out = {}
-for _, res in pairs(results) do
-  for _, s in ipairs(res.result or {}) do
-    local loc = s.location
-    out[#out + 1] = {
-      name = s.name,
-      kind = type(kinds[s.kind]) == "string" and kinds[s.kind] or tostring(s.kind),
-      path = loc and vim.uri_to_fname(loc.uri) or nil,
-      line = loc and (loc.range.start.line + 1) or nil,
-      container = s.containerName,
-    }
+  /** Workspace symbol search. Resolves a buffer without relying on the
+   * current buffer, so it works in headless use. */
+  export const LSP_WORKSPACE_SYMBOLS = `
+  local query, wait_ms, path = ...
+  local buf = nil
+  if path then
+    buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
   end
-end
-return out
-`;
+  if not buf or buf == -1 then
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(b) and next(vim.lsp.get_clients({ bufnr = b })) then
+        buf = b
+        break
+      end
+    end
+  end
+  if not buf or buf == -1 then return { error = "no_lsp" } end
+  if #vim.lsp.get_clients({ bufnr = buf }) == 0 then return { error = "no_lsp" } end
+  local results = vim.lsp.buf_request_sync(buf, "workspace/symbol", { query = query }, wait_ms or 5000)
+  if not results then return { error = "lsp_timeout" } end
+  local kinds = vim.lsp.protocol.SymbolKind
+  local out = {}
+  for _, res in pairs(results) do
+    for _, s in ipairs(res.result or {}) do
+      local loc = s.location
+      out[#out + 1] = {
+        name = s.name,
+        kind = type(kinds[s.kind]) == "string" and kinds[s.kind] or tostring(s.kind),
+        path = loc and vim.uri_to_fname(loc.uri) or nil,
+        line = loc and (loc.range.start.line + 1) or nil,
+        container = s.containerName,
+      }
+    end
+  end
+  return out
+  `;

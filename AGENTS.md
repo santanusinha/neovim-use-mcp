@@ -9,17 +9,26 @@ AI agent can edit files with the user's LSP, formatters and plugins.
 
 ## Layout
 
+## Layout
+
 | Path | Role |
 |---|---|
-| `src/index.ts` | Entry point: stdio transport, tool registration, shutdown |
+| `src/index.ts` | Entry point: stdio transport, tool registration, tier wiring, shutdown |
 | `src/nvim/session.ts` | Spawns or attaches nvim, serialises calls, warms plugins |
 | `src/nvim/lua.ts` | Every Lua chunk that runs inside nvim |
-| `src/tools/buffer.ts` | File and buffer tools |
-| `src/tools/lsp.ts` | LSP tools |
+| `src/tools/buffer.ts` | File and buffer tools, minimal and full tier |
+| `src/tools/lsp.ts` | LSP tools, minimal and full tier |
 | `src/tools/exec.ts` | Lua and Ex command escape hatches |
-| `src/tools/context.ts` | Shared helpers: open, save, diagnostics feedback |
+| `src/tools/context.ts` | Shared helpers: open, save, structured diagnostics feedback |
 | `src/util/` | Config, errors, output format |
 | `test/` | Vitest suite plus manual smoke scripts |
+
+## Tool tiers
+
+The `--tools` flag picks the tier. `minimal` is the default and loads 10
+tools. `full` loads all 18. Registration functions take the tier and skip
+tools outside it. A new tool must state its tier in its description and in
+this table in `README.md`.
 
 ## Rules
 
@@ -29,29 +38,10 @@ AI agent can edit files with the user's LSP, formatters and plugins.
    maps that to a `ToolError` with a hint.
 4. Neovim sends absent arguments as `vim.NIL`, not `nil`. Convert them at the
    top of the chunk.
-5. Every edit tool saves by default and returns fresh diagnostics.
+5. Every edit tool saves by default and returns fresh diagnostics, as text
+   and as a structured payload from `editFeedback`.
 6. Every tool gets `annotations` with the correct read-only and destructive
    hints.
 7. Error messages must tell the agent what to do next.
-
-## Commands
-
-```bash
-npm run build     # tsc
-npm test          # vitest, needs a real nvim
-node test/smoke.mjs           # buffer tools against a temp file
-node test/lsp-go.mjs <dir> <file>   # LSP tools against a project
-```
-
-## Known constraints
-
-- Headless nvim does not fire `UIEnter` or `VeryLazy`. `WARMUP` in
-  `src/nvim/lua.ts` forces lazy.nvim to load the LSP plugins.
-- Language servers attach at different speeds. `OPEN_FILE` waits for a stable
-  client count instead of the first client.
-- One nvim process serves every request, so `NvimSession.run` keeps a queue.
-
-## Style
-
-Write comments and documents in ASD-STE100 Simplified Technical English: short
-active sentences, simple words, no jargon.
+8. `OPEN_FILE` must reuse an existing buffer. Never run `edit` on a modified
+   buffer; that discards unsaved changes or raises E37.

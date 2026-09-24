@@ -3,8 +3,17 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fail, ok } from "../util/format.js";
 import { describeError, execDisabled } from "../util/errors.js";
 import type { ToolContext } from "./context.js";
+import type { ToolTier } from "../util/config.js";
 
-export function registerExecTools(server: McpServer, ctx: ToolContext): void {
+const FULL_NOTE = "Full-tier tool. Enable with --tools full.";
+
+/** Register the exec tools. The tier picks which tools load: nvim_exec_lua is
+ * the minimal escape hatch; nvim_command is full-tier. */
+export function registerExecTools(
+  server: McpServer,
+  ctx: ToolContext,
+  tier: ToolTier = "minimal",
+): void {
   server.registerTool(
     "nvim_exec_lua",
     {
@@ -31,28 +40,30 @@ export function registerExecTools(server: McpServer, ctx: ToolContext): void {
     },
   );
 
-  server.registerTool(
-    "nvim_command",
-    {
-      title: "Run an Ex command",
-      description:
-        "Run a Neovim Ex command, for example 'Telescope find_files' or 'Git blame', " +
-        "and return its output. Use this to drive installed plugins.",
-      inputSchema: {
-        command: z.string().describe("Ex command without the leading colon"),
+  if (tier === "full") {
+    server.registerTool(
+      "nvim_command",
+      {
+        title: "Run an Ex command",
+        description:
+          `${FULL_NOTE} Run a Neovim Ex command, for example 'Telescope find_files' ` +
+          "or 'Git blame', and return its output. Use this to drive installed plugins.",
+        inputSchema: {
+          command: z.string().describe("Ex command without the leading colon"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       },
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-    },
-    async ({ command }) => {
-      try {
-        if (!ctx.config.allowExec) throw execDisabled("nvim_command");
-        const output = await ctx.session.run(async (client) =>
-          client.commandOutput(command),
-        );
-        return ok(output?.trim() || "The command produced no output.", { output });
-      } catch (error) {
-        return fail(describeError(error));
-      }
-    },
-  );
+      async ({ command }) => {
+        try {
+          if (!ctx.config.allowExec) throw execDisabled("nvim_command");
+          const output = await ctx.session.run(async (client) =>
+            client.commandOutput(command),
+          );
+          return ok(output?.trim() || "The command produced no output.", { output });
+        } catch (error) {
+          return fail(describeError(error));
+        }
+      },
+    );
+  }
 }
