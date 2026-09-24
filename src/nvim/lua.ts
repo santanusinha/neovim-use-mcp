@@ -31,6 +31,7 @@ end
 vim.wait(200)
 return { loaded = loaded }
 `;
+
 /** Open several files, attach LSP, and report buffer facts for each. */
 export const OPEN_FILES = `
 local paths, wait_ms = ...
@@ -41,9 +42,21 @@ for _, path in ipairs(paths) do
   if vim.fn.filereadable(abs) == 0 and vim.fn.isdirectory(abs) == 1 then
     out[#out + 1] = { error = "path is a directory: " .. abs }
   else
-    vim.cmd("edit " .. vim.fn.fnameescape(abs))
-    local buf = vim.api.nvim_get_current_buf()
+    -- Reuse an existing buffer for this path. Never run "edit" on a modified
+    -- buffer: that discards unsaved changes or raises E37.
+    local reuse = vim.fn.bufnr(abs)
+    if reuse == -1 then
+      vim.cmd("edit " .. vim.fn.fnameescape(abs))
+    end
+    local buf = reuse ~= -1 and reuse or vim.api.nvim_get_current_buf()
     vim.bo[buf].buflisted = true
+
+    -- Best effort: report a conventional swap file next to the target. The
+    -- session never writes swap files, so one here is stale or owned by
+    -- another editor. shortmess+=A already picks "Edit anyway" with no
+    -- prompt; this note tells the caller which file to delete.
+    local swap = vim.fn.glob(vim.fn.fnamemodify(abs, ":h") .. "/." .. vim.fn.fnamemodify(abs, ":t") .. ".swp")
+    local stale = swap ~= "" and vim.fn.filereadable(swap) == 1 and swap or nil
 
     -- Servers attach at different speeds. Wait for the count to stay stable.
     local deadline = vim.loop.now() + (wait_ms or 3000)
@@ -72,6 +85,7 @@ for _, path in ipairs(paths) do
       filetype = vim.bo[buf].filetype,
       modified = vim.bo[buf].modified,
       lsp_clients = names,
+      stale_swap = stale,
     }
   end
 end
@@ -85,6 +99,12 @@ return out
   if vim.fn.filereadable(abs) == 0 and vim.fn.isdirectory(abs) == 1 then
     return { error = "path is a directory: " .. abs }
   end
+  -- Best effort: report a conventional swap file next to the target. The
+  -- session never writes swap files, so one that sits here is stale or owned
+  -- by another editor. "shortmess+=A" already picks "Edit anyway" without a
+  -- prompt; this note tells the caller which file to delete.
+  local swap = vim.fn.glob(vim.fn.fnamemodify(abs, ":h") .. "/." .. vim.fn.fnamemodify(abs, ":t") .. ".swp")
+  local stale = nil
   -- An open buffer for this path may already exist (implicit open). Reuse it
   -- and never run "edit" on a modified buffer: that would discard unsaved
   -- changes or raise E37. Only load the file when no buffer holds it yet.
@@ -94,6 +114,9 @@ return out
     buf = vim.api.nvim_get_current_buf()
   end
   vim.bo[buf].buflisted = true
+  if swap ~= "" and vim.fn.filereadable(swap) == 1 then
+    stale = swap
+  end
 
 -- Fast path. The buffer is already open with clients, so skip the wait loop.
 local existing = vim.lsp.get_clients({ bufnr = buf })
@@ -108,6 +131,7 @@ if vim.api.nvim_buf_is_loaded(buf) and #existing > 0 then
     filetype = vim.bo[buf].filetype,
     modified = vim.bo[buf].modified,
     lsp_clients = names,
+    stale_swap = stale,
   }
 end
 
@@ -139,11 +163,14 @@ return {
   filetype = vim.bo[buf].filetype,
   modified = vim.bo[buf].modified,
   lsp_clients = names,
+  stale_swap = stale,
 }
 `;
 
-/** Read a line range from a buffer. */
-export const READ_LINES = `
+
+  /** Read a line range from a buffer. */
+  export const READ_LINES = `
+
 local path, start_line, end_line, max_lines = ...
 if start_line == vim.NIL then start_line = nil end
 if end_line == vim.NIL then end_line = nil end

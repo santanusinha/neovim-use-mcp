@@ -319,14 +319,27 @@ nvim_exec_lua code="return vim.fn.getcwd()"
 
 The minimal tier loads 10 tools. Start the server with `--tools full` to load
 all 18. Full-tier tool descriptions start with "Full-tier tool".
-
 ### A language server does not attach
 
 1. Check that the file type has a language server in your Neovim config.
 2. Call `nvim_open_file` with a longer `wait_ms`, for example `10000`.
 3. Confirm the server starts in your own Neovim for the same file.
 
+### A stale swap file blocks or warns
+
+The server never writes swap files and never stops on the E325 prompt. A
+swap file that sits next to a target file is stale, or another editor owns
+it. `nvim_open_file` still opens the file and prints a note:
+
+```
+Stale swap file ignored: /path/.file.txt.swp. Delete it to remove this note.
+```
+
+Delete the `.swp` file to remove the note. The structured result carries
+the path in `stale_swap`.
+
 ### The server does not start
+
 
 Run it by hand and read stderr:
 

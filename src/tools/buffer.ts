@@ -13,8 +13,10 @@ import type { ToolTier } from "../util/config.js";
 
 const FULL_NOTE = "Full-tier tool. Enable with --tools full.";
 
-/** Register the buffer tools. The tier picks which tools load: minimal is the
- * default daily loop; full adds the rare or overlapping tools. */
+/**
+ * Register the buffer tools. The tier picks which tools load: minimal is the
+ * default daily loop; full adds the rare or overlapping tools.
+ */
 export function registerBufferTools(
   server: McpServer,
   ctx: ToolContext,
@@ -48,19 +50,25 @@ export function registerBufferTools(
     async ({ path, wait_ms }) => {
       try {
         const paths = Array.isArray(path) ? path : [path];
-        const results = await ctx.session.lua<Record<string, unknown>[]>(
-          lua.OPEN_FILES,
-          [paths, wait_ms ?? ctx.config.lspWaitMs],
-        );
-        const lines = (results ?? []).map((info) => {
-          if (info.error) return `Could not open: ${String(info.error)}`;
-          const clients = (info.lsp_clients as string[]) ?? [];
-          const base = `Opened ${shortPath(String(info.path))} (buffer ${info.buffer}, ` +
-            `${info.line_count} lines, filetype ${String(info.filetype) || "none"}).`;
-          return clients.length > 0
-            ? `${base}\n  LSP clients: ${clients.join(", ")}`
-            : `${base}\n  No LSP client attached. Diagnostics may be empty.`;
-        });
+          const results = await ctx.session.lua<Record<string, unknown>[]>(
+            lua.OPEN_FILES,
+            [paths, wait_ms ?? ctx.config.lspWaitMs],
+          );
+          const lines = (results ?? []).map((info) => {
+            if (info.error) return `Could not open: ${String(info.error)}`;
+
+            if (info.error) return `Could not open: ${String(info.error)}`;
+            const clients = (info.lsp_clients as string[]) ?? [];
+            const base = `Opened ${shortPath(String(info.path))} (buffer ${info.buffer}, ` +
+              `${info.line_count} lines, filetype ${String(info.filetype) || "none"}).`;
+            const body = clients.length > 0
+              ? `${base}\n  LSP clients: ${clients.join(", ")}`
+              : `${base}\n  No LSP client attached. Diagnostics may be empty.`;
+            return info.stale_swap
+              ? `${body}\n  Stale swap file ignored: ${String(info.stale_swap)}. Delete it to remove this note.`
+              : body;
+          });
+
         return ok(lines.join("\n"), { files: results });
       } catch (error) {
         return fail(describeError(error));

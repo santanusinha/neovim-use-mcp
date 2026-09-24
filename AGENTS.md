@@ -45,3 +45,7 @@ this table in `README.md`.
 7. Error messages must tell the agent what to do next.
 8. `OPEN_FILE` must reuse an existing buffer. Never run `edit` on a modified
    buffer; that discards unsaved changes or raises E37.
+9. The session sets `noswapfile` and `shortmess+=A` at start. A headless
+   server must never block on the E325 swap prompt. `OPEN_FILE` reports a
+   detected swap file as `stale_swap`, not as an error.
+

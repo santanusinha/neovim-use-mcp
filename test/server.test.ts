@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /** Minimal MCP stdio client, enough to drive the server in a test. */
@@ -10,46 +11,49 @@ class Client {
   private buffer = "";
   private pending = new Map<number, (msg: any) => void>();
   private nextId = 1;
-
-  constructor(cwd: string, extraArgs: string[] = []) {
-    this.proc = spawn("node", ["dist/index.js", "--cwd", cwd, ...extraArgs], {
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-    this.proc.stdout!.on("data", (chunk: Buffer) => {
-      this.buffer += chunk.toString();
-      let index: number;
-      while ((index = this.buffer.indexOf("\n")) >= 0) {
-        const line = this.buffer.slice(0, index).trim();
-        this.buffer = this.buffer.slice(index + 1);
-        if (!line) continue;
-        const msg = JSON.parse(line);
-        const resolve = this.pending.get(msg.id);
-        if (resolve) {
-          this.pending.delete(msg.id);
-          resolve(msg);
+    constructor(cwd: string, extraArgs: string[] = []) {
+      this.proc = spawn("node", ["dist/index.js", "--cwd", cwd, ...extraArgs], {
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      this.proc.stdout!.on("data", (chunk: Buffer) => {
+        this.buffer += chunk.toString();
+        let index: number;
+        while ((index = this.buffer.indexOf("\n")) >= 0) {
+          const line = this.buffer.slice(0, index).trim();
+          this.buffer = this.buffer.slice(index + 1);
+          if (!line) continue;
+          const msg = JSON.parse(line);
+          const resolve = this.pending.get(msg.id);
+          if (resolve) {
+            this.pending.delete(msg.id);
+            resolve(msg);
+          }
         }
-      }
-    });
-  }
+      });
+    }
 
-  send(method: string, params: unknown): Promise<any> {
-    const id = this.nextId++;
-    return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+    send(method: string, params: unknown): Promise<any> {
+      const id = this.nextId++;
+      return new Promise((resolve) => {
+        this.pending.set(id, resolve);
+        this.proc.stdin!.write(
+          JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+        );
+      });
+    }
+
+    notify(method: string, params: unknown): void {
       this.proc.stdin!.write(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+        JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n",
       );
-    });
-  }
+    }
 
-  notify(method: string, params: unknown): void {
-    this.proc.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
-  }
+    async call(name: string, args: Record<string, unknown>): Promise<string> {
+      const response = await this.send("tools/call", { name, arguments: args });
+      return response.result?.content?.[0]?.text ?? JSON.stringify(response);
+    }
 
-  async call(name: string, args: Record<string, unknown>): Promise<string> {
-    const response = await this.send("tools/call", { name, arguments: args });
-    return response.result?.content?.[0]?.text ?? JSON.stringify(response);
-  }
+
 
   /** Call a tool and return the structured content the server attached. */
   async callStructured(name: string, args: Record<string, unknown>): Promise<any> {
@@ -133,6 +137,40 @@ describe("neovim-use-mcp", () => {
     expect(text).toContain("2 lines");
     expect(text).toContain("1 lines");
   }, 30000);
+
+  it("never writes swap files", async () => {
+    const target = join(dir, "noswap.txt");
+    writeFileSync(target, "a\nb\n");
+    await client.call("nvim_open_file", { path: target, wait_ms: 0 });
+    await client.call("nvim_edit_lines", {
+      path: target,
+      start_line: 1,
+      end_line: 1,
+      text: "changed",
+    });
+    const swaps = readdirSync(dir).filter((name) => name.endsWith(".swp"));
+    expect(swaps).toEqual([]);
+  }, 30000);
+
+  it("opens a file with a stale swap file and reports it", async () => {
+    const target = join(dir, "stale.txt");
+    writeFileSync(target, "x\ny\n");
+    const swap = join(dir, ".stale.txt.swp");
+    writeFileSync(swap, "B6");
+    const text = await client.call("nvim_open_file", {
+      path: target,
+      wait_ms: 0,
+    });
+    expect(text).toContain("2 lines");
+    expect(text).toContain("Stale swap file ignored");
+    expect(text).toContain(".stale.txt.swp");
+    const structured = await client.callStructured("nvim_open_file", {
+      path: target,
+      wait_ms: 0,
+    });
+    expect(structured.files[0].stale_swap).toContain(".stale.txt.swp");
+  }, 30000);
+
 
   it("reads lines with numbers", async () => {
     const text = await client.call("nvim_read_file", { path: file });

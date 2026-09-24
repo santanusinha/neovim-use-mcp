@@ -49,11 +49,27 @@ export function shortPath(path: string): string {
   const cwd = process.cwd();
   return path.startsWith(cwd + "/") ? path.slice(cwd.length + 1) : path;
 }
+/** One-line hints for known Neovim error codes. */
+const VIM_ERROR_HINTS: Record<string, string> = {
+  E37: "The buffer has unsaved changes. Save it first, then retry.",
+  E325: "A swap file exists for this file. The server ignores swap prompts. Delete the .swp file if this error persists.",
+  E484: "The path is not on disk. Check the path, or write the file first.",
+  E5555: "The path is not on disk. Check the path, or write the file first.",
+};
+
+/** Append an actionable hint when the message carries a known Vim error code. */
+export function enrichVimError(message: string): string {
+  for (const [code, hint] of Object.entries(VIM_ERROR_HINTS)) {
+    if (message.includes(code + ":")) return `${message}\nHint: ${hint}`;
+  }
+  return message;
+}
 
 /** Neovim returns tables; a Lua error table carries an `error` key. */
 export function luaError(value: unknown): string | undefined {
-    if (value && typeof value === "object" && "error" in value) {
-      return String((value as { error: unknown }).error);
+  if (value && typeof value === "object" && "error" in value) {
+    return enrichVimError(String((value as { error: unknown }).error));
   }
   return undefined;
 }
+
